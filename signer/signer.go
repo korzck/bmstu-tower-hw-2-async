@@ -7,6 +7,8 @@ import (
 	"sync"
 )
 
+const MaxTh = 6
+var md5Mutex sync.Mutex
 func ExecutePipeline(jobs ...job) {
 	chans := make([]chan interface{}, len(jobs)+1)
 	for i := range chans {
@@ -21,9 +23,9 @@ func ExecutePipeline(jobs ...job) {
 }
 
 func worker(in, out chan interface{}, j job, wg *sync.WaitGroup) {
-	defer close(out)
 	j(in, out)
 	wg.Done()
+	close(out)
 }
 
 func crc32Worker(data string, destination *string, wg *sync.WaitGroup) {
@@ -31,46 +33,57 @@ func crc32Worker(data string, destination *string, wg *sync.WaitGroup) {
 	wg.Done()
 }
 
+func getMd5(data string) string {
+	md5Mutex.Lock()
+	res := DataSignerMd5(data)
+	md5Mutex.Unlock()
+	return res
+}
+
+func getCrc32Concat(data, datamd5 string) string {
+	var crc32, crc32md5 string
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go crc32Worker(data, &crc32, &wg)
+	go crc32Worker(datamd5, &crc32md5, &wg)
+	wg.Wait()
+	return crc32+"~"+crc32md5
+}
+
+func getSingleHash(i interface{}, out chan interface{}, shwg *sync.WaitGroup) {
+	data := strconv.Itoa(i.(int))
+	datamd5 := getMd5(data)
+	out <- getCrc32Concat(data, datamd5)
+	shwg.Done()
+}
+
 func SingleHash(in, out chan interface{}) {
-	m := &sync.Mutex{}
 	var shwg sync.WaitGroup
 	for i := range in {
 		shwg.Add(1)
-		go func(i interface{}, out chan interface{}, m *sync.Mutex) {
-			data := strconv.Itoa(i.(int))
-			m.Lock()
-			datamd5 := DataSignerMd5(data)
-			m.Unlock()
-			var crc32, crc32md5 string
-			var wg sync.WaitGroup
-			wg.Add(2)
-			go crc32Worker(data, &crc32, &wg)
-			go crc32Worker(datamd5, &crc32md5, &wg)
-			wg.Wait()
-			res := crc32+"~"+crc32md5
-			out <- res
-			shwg.Done()
-		}(i, out, m)
+		go getSingleHash(i, out, &shwg)
 	}
 	shwg.Wait()
+}
+
+func getMultiHash(i interface{}, out chan interface{}, mhwg *sync.WaitGroup) {
+	input := make([]string, MaxTh)
+	var wg sync.WaitGroup
+	wg.Add(MaxTh)
+	for j := 0; j < MaxTh; j++ {
+		go crc32Worker(strconv.Itoa(j)+i.(string), &input[j], &wg)
+	}
+	wg.Wait()
+	res := strings.Join(input, "")
+	out <- res
+	mhwg.Done()
 }
 
 func MultiHash(in, out chan interface{}) {
 	var mhwg sync.WaitGroup
 	for i := range in {
 		mhwg.Add(1)
-		go func(i interface{}, out chan interface{}) {
-			input := make([]string, 6)
-			var wg sync.WaitGroup
-			wg.Add(6)
-			for j := 0; j < 6; j++ {
-				go crc32Worker(strconv.Itoa(j)+i.(string), &input[j], &wg)
-			}
-			wg.Wait()
-			res := strings.Join(input, "")
-			out <- res
-			mhwg.Done()
-		}(i, out)
+		go getMultiHash(i, out, &mhwg)
 	}
 	mhwg.Wait()
 }
