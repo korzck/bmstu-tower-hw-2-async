@@ -9,6 +9,7 @@ import (
 
 const MaxTh = 6
 var md5Mutex sync.Mutex
+var Memoize sync.Map
 func ExecutePipeline(jobs ...job) {
 	chans := make([]chan interface{}, len(jobs)+1)
 	for i := range chans {
@@ -34,9 +35,13 @@ func crc32Worker(data string, destination *string, wg *sync.WaitGroup) {
 }
 
 func getMd5(data string) string {
+	if v, ok := Memoize.Load(data); ok {
+		return v.(string)
+	}
 	md5Mutex.Lock()
 	res := DataSignerMd5(data)
 	md5Mutex.Unlock()
+	Memoize.Store(data, res)
 	return res
 }
 
