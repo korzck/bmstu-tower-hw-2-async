@@ -8,8 +8,7 @@ import (
 )
 
 const MaxTh = 6
-var md5Mutex sync.Mutex
-var Memoize sync.Map
+
 func ExecutePipeline(jobs ...job) {
 	chans := make([]chan interface{}, len(jobs)+1)
 	for i := range chans {
@@ -24,24 +23,20 @@ func ExecutePipeline(jobs ...job) {
 }
 
 func worker(in, out chan interface{}, j job, wg *sync.WaitGroup) {
+	defer func() {
+		close(out)
+		wg.Done()
+	}()
 	j(in, out)
-	wg.Done()
-	close(out)
 }
 
 func crc32Worker(data string, destination *string, wg *sync.WaitGroup) {
+	defer wg.Done()
 	*destination = DataSignerCrc32(data)
-	wg.Done()
 }
 
 func getMd5(data string) string {
-	if v, ok := Memoize.Load(data); ok {
-		return v.(string)
-	}
-	md5Mutex.Lock()
 	res := DataSignerMd5(data)
-	md5Mutex.Unlock()
-	Memoize.Store(data, res)
 	return res
 }
 
@@ -64,11 +59,11 @@ func getSingleHash(i interface{}, out chan interface{}, shwg *sync.WaitGroup) {
 
 func SingleHash(in, out chan interface{}) {
 	var shwg sync.WaitGroup
+	defer shwg.Wait()
 	for i := range in {
 		shwg.Add(1)
 		go getSingleHash(i, out, &shwg)
 	}
-	shwg.Wait()
 }
 
 func getMultiHash(i interface{}, out chan interface{}, mhwg *sync.WaitGroup) {
@@ -86,11 +81,11 @@ func getMultiHash(i interface{}, out chan interface{}, mhwg *sync.WaitGroup) {
 
 func MultiHash(in, out chan interface{}) {
 	var mhwg sync.WaitGroup
+	defer mhwg.Wait()
 	for i := range in {
 		mhwg.Add(1)
 		go getMultiHash(i, out, &mhwg)
 	}
-	mhwg.Wait()
 }
 
 func CombineResults(in, out chan interface{}) {
